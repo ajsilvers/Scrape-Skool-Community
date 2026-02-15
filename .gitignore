@@ -1,0 +1,20 @@
+node_modules/
+output/
+.tmp/
+tmp/
+cookies.json
+.DS_Store
+.env
+*.log
+
+# Landing page build artifacts
+landing-page/.next/
+landing-page/node_modules/
+landing-page/out/
+
+# Skill package build
+skool-community-scraper/node_modules/
+
+# Debug artifacts
+.tmp/*.png
+.tmp/*.html

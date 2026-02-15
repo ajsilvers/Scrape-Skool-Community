@@ -1,0 +1,25 @@
+{
+  "name": "skool-community-scraper",
+  "version": "1.0.0",
+  "description": "Scrape entire Skool.com communities - courses, videos, resources, text content",
+  "main": "scripts/orchestrator.js",
+  "type": "module",
+  "scripts": {
+    "setup": "npm install && npx playwright install chromium",
+    "scrape": "node scripts/orchestrator.js",
+    "scrape:classroom": "node scripts/scrape-classroom.js",
+    "download:videos": "node scripts/download-videos.js",
+    "download:resources": "node scripts/download-resources.js",
+    "validate:cookies": "node scripts/validate-cookies.js"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "fs-extra": "^11.3.3",
+    "ora": "^9.3.0",
+    "playwright": "^1.58.2",
+    "yt-dlp-wrap": "^2.3.12"
+  },
+  "keywords": ["skool", "scraper", "classroom", "video-downloader", "playwright"],
+  "author": "JangoAI",
+  "license": "MIT"
+}
