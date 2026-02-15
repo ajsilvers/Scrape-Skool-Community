@@ -271,7 +271,8 @@ function extractResourcesFromDesc(desc) {
   const seen = new Set();
 
   // Find URLs in the parsed desc that look like resources
-  const urlRegex = /https?:\/\/[^\s"'<>)]+/g;
+  // Exclude ] to avoid matching across markdown link boundaries [text](url)
+  const urlRegex = /https?:\/\/[^\s"'<>)\]]+/g;
   const matches = desc.match(urlRegex) || [];
   for (const url of matches) {
     if (seen.has(url)) continue;
@@ -281,6 +282,48 @@ function extractResourcesFromDesc(desc) {
   }
 
   return resources;
+}
+
+/**
+ * Extract resources directly from ProseMirror JSON (before markdown conversion).
+ * This captures link marks with their display text, which gives better resource names.
+ */
+function extractResourcesFromProseMirror(desc) {
+  if (!desc || typeof desc !== 'string' || !desc.startsWith('[v2]')) return [];
+  const resources = [];
+  const seen = new Set();
+
+  try {
+    const nodes = JSON.parse(desc.slice(4));
+    walkProseMirrorForLinks(nodes, resources, seen);
+  } catch { /* ignore parse errors */ }
+
+  return resources;
+}
+
+function walkProseMirrorForLinks(nodes, resources, seen) {
+  if (!Array.isArray(nodes)) return;
+  for (const node of nodes) {
+    if (node.type === 'text' && node.marks) {
+      for (const mark of node.marks) {
+        if (mark.type === 'link' && mark.attrs?.href) {
+          const href = mark.attrs.href;
+          if (!seen.has(href) && !href.includes('skool.com')) {
+            seen.add(href);
+            resources.push({ href, text: node.text || href, isDownload: false });
+          }
+        }
+      }
+    }
+    if (node.content) walkProseMirrorForLinks(node.content, resources, seen);
+    if (node.type === 'embed' && node.attrs?.src) {
+      const src = node.attrs.src;
+      if (!seen.has(src) && !src.includes('skool.com')) {
+        seen.add(src);
+        resources.push({ href: src, text: 'Embedded resource', isDownload: false });
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +443,18 @@ async function scrapeClassroom(communityUrl, options = {}) {
         const sl = sidebarLessons[li];
         const metaInfo = lessonMetaMap.get(sl.lessonId);
         const contentMarkdown = metaInfo?.desc ? parseDesc(metaInfo.desc) : '';
+        // Note: course-level __NEXT_DATA__ usually omits desc for individual lessons.
+        // Resources are primarily extracted when visiting each lesson page (below).
         const resources = extractResourcesFromDesc(contentMarkdown);
+        // Also try ProseMirror extraction if desc available at course level
+        if (metaInfo?.desc) {
+          const pmResources = extractResourcesFromProseMirror(metaInfo.desc);
+          for (const r of pmResources) {
+            if (!resources.some(er => er.href === r.href)) {
+              resources.push(r);
+            }
+          }
+        }
 
         moduleData.lessons.push({
           title: sl.title,
@@ -446,7 +500,10 @@ async function scrapeClassroom(communityUrl, options = {}) {
             const resources = [];
             const images = [];
             const seen = new Set();
-            const area = document.querySelector('.ql-editor, article, main');
+            // Skool uses ProseMirror editor, not Quill - try multiple selectors
+            const area = document.querySelector(
+              '.ProseMirror, .ql-editor, [class*="styled__Content"], [class*="ContentWrapper"], [class*="lesson-body"], [class*="module-content"], article, main'
+            );
             if (!area) return { resources, images };
 
             area.querySelectorAll('a[href]').forEach(a => {
@@ -475,18 +532,30 @@ async function scrapeClassroom(communityUrl, options = {}) {
           }
           lesson.images = domExtras.images;
 
-          // If content was empty from course-level metadata, extract from lesson page
-          if (!lesson.content.markdown || lesson.content.markdown.length < 20) {
-            // Try lesson page's __NEXT_DATA__ (has full desc for current lesson)
-            if (lessonProps.course?.children) {
-              for (const section of lessonProps.course.children) {
-                for (const item of (section.children || [])) {
-                  if (item.course?.id === lesson.lessonId) {
-                    const m = typeof item.course.metadata === 'object' ? item.course.metadata : {};
-                    if (m.desc) {
-                      const parsed = parseDesc(m.desc);
-                      if (parsed.length > (lesson.content.markdown?.length || 0)) {
-                        lesson.content.markdown = parsed;
+          // Extract content and resources from lesson page's __NEXT_DATA__
+          // (course-level __NEXT_DATA__ does NOT include desc for lessons)
+          if (lessonProps.course?.children) {
+            for (const section of lessonProps.course.children) {
+              for (const item of (section.children || [])) {
+                if (item.course?.id === lesson.lessonId) {
+                  const m = typeof item.course.metadata === 'object' ? item.course.metadata : {};
+                  if (m.desc) {
+                    const parsed = parseDesc(m.desc);
+                    if (parsed.length > (lesson.content.markdown?.length || 0)) {
+                      lesson.content.markdown = parsed;
+                    }
+                    // Extract resources from ProseMirror JSON (better: gets link text)
+                    const pmResources = extractResourcesFromProseMirror(m.desc);
+                    for (const r of pmResources) {
+                      if (!lesson.resources.some(er => er.href === r.href)) {
+                        lesson.resources.push(r);
+                      }
+                    }
+                    // Also extract from markdown (catches URLs not in link marks)
+                    const mdResources = extractResourcesFromDesc(parsed);
+                    for (const r of mdResources) {
+                      if (!lesson.resources.some(er => er.href === r.href)) {
+                        lesson.resources.push(r);
                       }
                     }
                   }
@@ -498,12 +567,14 @@ async function scrapeClassroom(communityUrl, options = {}) {
           // Final fallback: extract text from DOM
           if (!lesson.content.markdown || lesson.content.markdown.length < 20) {
             const domContent = await page.evaluate(() => {
-              // Try the lesson content area specifically
-              const ql = document.querySelector('.ql-editor');
-              if (ql && ql.textContent.trim().length > 20) return ql.textContent.trim();
+              // Try ProseMirror editor first (Skool's actual editor), then Quill fallback
+              for (const sel of ['.ProseMirror', '.ql-editor', '[class*="module-content"]']) {
+                const el = document.querySelector(sel);
+                if (el && el.textContent.trim().length > 20) return el.textContent.trim();
+              }
 
               // Look for the main content area (right panel)
-              const contentDivs = document.querySelectorAll('[class*="styled__Content"], [class*="ContentWrapper"], [class*="lesson-body"]');
+              const contentDivs = document.querySelectorAll('[class*="styled__Content"], [class*="ContentWrapper"], [class*="lesson-body"], [class*="module-content"]');
               for (const div of contentDivs) {
                 const text = div.textContent.trim();
                 if (text.length > 20) return text;
