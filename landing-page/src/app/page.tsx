@@ -812,15 +812,115 @@ function Footer() {
 
         {/* Cheeky bottom text */}
         <p className="text-center text-xs text-zinc-700 mt-8">
-          Built by{" "}
+          Donated to the community with love by{" "}
           <span className="text-zinc-500 font-medium">JangoAI</span>
           {" "}&middot;{" "}
           No Skool communities were harmed in the making of this tool.
-          <br />
-          We just... backed up their content. Aggressively.
         </p>
       </div>
     </footer>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Gate Modal                                                          */
+/* ------------------------------------------------------------------ */
+
+const VALID_CODE = "MaoRefferal";
+
+function GateModal({ onUnlock }: { onUnlock: () => void }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState(false);
+  const [shake, setShake] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (code.trim() === VALID_CODE) {
+      onUnlock();
+    } else {
+      setError(true);
+      setShake(true);
+      setTimeout(() => setShake(false), 600);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#030014]">
+      {/* Background orbs */}
+      <div className="absolute top-1/3 left-1/4 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl animate-float" />
+      <div
+        className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-blue-600/20 rounded-full blur-3xl animate-float"
+        style={{ animationDelay: "2s" }}
+      />
+
+      <div
+        className={`relative z-10 w-full max-w-md mx-4 glass rounded-3xl p-8 sm:p-10 text-center animate-fade-in-up ${
+          shake ? "animate-shake" : ""
+        }`}
+      >
+        {/* Lock icon */}
+        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center mx-auto mb-6 animate-pulse-glow">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="36"
+            height="36"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
+
+        <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">
+          Exclusive Access
+        </h2>
+        <p className="text-zinc-400 mb-8 text-sm sm:text-base">
+          Enter your referral code to unlock the Skool Community Scraper.
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="relative">
+            <input
+              type="text"
+              value={code}
+              onChange={(e) => {
+                setCode(e.target.value);
+                setError(false);
+              }}
+              placeholder="Enter referral code..."
+              autoFocus
+              className={`w-full px-5 py-4 rounded-xl bg-white/5 border text-white placeholder-zinc-500 focus:outline-none focus:ring-2 transition-all duration-300 text-center text-lg font-mono tracking-widest ${
+                error
+                  ? "border-red-500/50 focus:border-red-500/50 focus:ring-red-500/20"
+                  : "border-white/10 focus:border-violet-500/50 focus:ring-violet-500/20"
+              }`}
+            />
+          </div>
+
+          {error && (
+            <p className="text-red-400 text-sm animate-fade-in-up">
+              Invalid code. Ask the person who sent you here.
+            </p>
+          )}
+
+          <button
+            type="submit"
+            className="w-full px-8 py-4 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white font-semibold text-lg transition-all duration-300 hover:shadow-lg hover:shadow-violet-500/25 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            Unlock Access
+          </button>
+        </form>
+
+        <p className="text-xs text-zinc-600 mt-6">
+          Don&apos;t have a code? You&apos;re probably in the wrong place.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -829,6 +929,12 @@ function Footer() {
 /* ------------------------------------------------------------------ */
 
 export default function Home() {
+  const [unlocked, setUnlocked] = useState(false);
+
+  if (!unlocked) {
+    return <GateModal onUnlock={() => setUnlocked(true)} />;
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Navbar />

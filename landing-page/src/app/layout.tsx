@@ -28,14 +28,16 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Skool Community Scraper",
     description:
-      "Save your Skool.com learning content before canceling. Courses, Mux/Loom videos, resources - all downloaded locally.",
+      "Download your entire Skool classroom before you hit Cancel. Courses, videos, resources - everything. Free & open source. By JangoAI.",
     type: "website",
+    url: "https://skool-community-scraper.vercel.app",
+    siteName: "Skool Community Scraper",
   },
   twitter: {
     card: "summary_large_image",
     title: "Skool Community Scraper",
     description:
-      "Save your Skool.com learning content before canceling.",
+      "Download your entire Skool classroom before you cancel. Free & open source tool by JangoAI.",
   },
 };
 
