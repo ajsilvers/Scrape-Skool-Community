@@ -130,11 +130,12 @@ function createPool(limit) {
 
 // -- Gather download items from classroom data --------------------------------
 
-function collectItems(data) {
+function collectItems(data, moduleFilter = null) {
   const resources = [];
   const images = [];
 
   for (const mod of data.modules || []) {
+    if (moduleFilter && mod.title !== moduleFilter) continue;
     const moduleName = sanitize(mod.title || 'Untitled Module');
     for (const lesson of mod.lessons || []) {
       const lessonName = sanitize(lesson.title || 'Untitled Lesson');
@@ -181,8 +182,14 @@ async function main() {
   }
 
   const forceRedownload = args.includes('--force');
+  let moduleFilter = null;
+  const moduleIdx = args.indexOf('--module');
+  if (moduleIdx !== -1 && args[moduleIdx + 1]) {
+    moduleFilter = args[moduleIdx + 1];
+  }
   const projectRoot = path.resolve(__dirname, '..');
-  const dataPath = path.join(projectRoot, 'output', community, 'classroom-data.json');
+  const outputBase = process.env.SKOOL_OUTPUT_DIR || path.join(projectRoot, 'output');
+  const dataPath = path.join(outputBase, community, 'classroom-data.json');
 
   if (!await fs.pathExists(dataPath)) {
     console.error(chalk.red(`Classroom data not found: ${dataPath}`));
@@ -190,7 +197,7 @@ async function main() {
   }
 
   const data = await fs.readJson(dataPath);
-  const { resources, images } = collectItems(data);
+  const { resources, images } = collectItems(data, moduleFilter);
 
   const totalItems = resources.length + images.length;
   if (totalItems === 0) {
@@ -200,8 +207,8 @@ async function main() {
 
   console.log(chalk.cyan(`Found ${resources.length} resource(s) and ${images.length} image(s)\n`));
 
-  const resourcesBase = path.join(projectRoot, 'output', community, 'resources');
-  const imagesBase = path.join(projectRoot, 'output', community, 'images');
+  const resourcesBase = path.join(outputBase, community, 'resources');
+  const imagesBase = path.join(outputBase, community, 'images');
 
   let completed = 0;
   let succeeded = 0;

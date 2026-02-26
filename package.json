@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "setup": "npm install && npx playwright install chromium && cd landing-page && npm install",
     "scrape": "node index.js",
     "scrape:jack": "node index.js https://www.skool.com/aiautomationsbyjack",
     "scrape:society": "node index.js https://www.skool.com/ai-automation-society-plus",

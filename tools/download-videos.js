@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 
 const YT_DLP = '/opt/homebrew/bin/yt-dlp';
 const FFMPEG = '/opt/homebrew/bin/ffmpeg';
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 4;
 
 // -- Helpers ------------------------------------------------------------------
 
@@ -52,6 +52,7 @@ function buildYtDlpArgs(url, outputPath, platform, flags) {
     '-o', outputPath,
     '--no-warnings',
     '--progress',
+    '--no-part',
   ];
 
   // Mux HLS streams need special handling
@@ -137,9 +138,10 @@ function createPool(limit) {
 
 // -- Gather all videos from classroom data ------------------------------------
 
-function collectVideos(data) {
+function collectVideos(data, moduleFilter = null) {
   const videos = [];
   for (const mod of data.modules || []) {
+    if (moduleFilter && mod.title !== moduleFilter) continue;
     const moduleName = sanitize(mod.title || 'Untitled Module');
     for (const lesson of mod.lessons || []) {
       const lessonName = sanitize(lesson.title || 'Untitled Lesson');
@@ -175,10 +177,21 @@ async function main() {
   if (cookiesIdx !== -1 && args[cookiesIdx + 1]) {
     cookiesFromBrowser = args[cookiesIdx + 1];
   }
+  let moduleFilter = null;
+  const moduleIdx = args.indexOf('--module');
+  if (moduleIdx !== -1 && args[moduleIdx + 1]) {
+    moduleFilter = args[moduleIdx + 1];
+  }
+  let concurrency = MAX_CONCURRENT;
+  const concurrencyIdx = args.indexOf('--concurrency');
+  if (concurrencyIdx !== -1 && args[concurrencyIdx + 1]) {
+    concurrency = parseInt(args[concurrencyIdx + 1], 10) || MAX_CONCURRENT;
+  }
   const flags = { cookiesFromBrowser };
 
   const projectRoot = path.resolve(__dirname, '..');
-  const dataPath = path.join(projectRoot, 'output', community, 'classroom-data.json');
+  const outputBase = process.env.SKOOL_OUTPUT_DIR || path.join(projectRoot, 'output');
+  const dataPath = path.join(outputBase, community, 'classroom-data.json');
 
   if (!await fs.pathExists(dataPath)) {
     console.error(chalk.red(`Classroom data not found: ${dataPath}`));
@@ -186,7 +199,7 @@ async function main() {
   }
 
   const data = await fs.readJson(dataPath);
-  const videos = collectVideos(data);
+  const videos = collectVideos(data, moduleFilter);
 
   if (videos.length === 0) {
     console.log(chalk.yellow('No videos found in classroom data.'));
@@ -195,7 +208,7 @@ async function main() {
 
   console.log(chalk.cyan(`Found ${videos.length} video(s) across ${(data.modules || []).length} module(s)\n`));
 
-  const baseDir = path.join(projectRoot, 'output', community, 'videos');
+  const baseDir = path.join(outputBase, community, 'videos');
   const report = {
     community,
     startedAt: new Date().toISOString(),
@@ -208,7 +221,16 @@ async function main() {
   let failed = 0;
   let skipped = 0;
 
-  const pool = createPool(MAX_CONCURRENT);
+  // Load manifest of previously downloaded files (to skip files moved to cloud)
+  const manifestPath = path.join(outputBase, community, 'downloaded-videos-manifest.txt');
+  const manifestSet = new Set();
+  if (await fs.pathExists(manifestPath)) {
+    const lines = (await fs.readFile(manifestPath, 'utf8')).split('\n').filter(Boolean);
+    for (const line of lines) manifestSet.add(line.trim());
+    console.log(chalk.gray(`Loaded manifest: ${manifestSet.size} previously downloaded videos\n`));
+  }
+
+  const pool = createPool(concurrency);
 
   const tasks = videos.map((video) => {
     return pool(async () => {
@@ -217,7 +239,8 @@ async function main() {
       const idx = ++completed;
       const label = `[${idx}/${videos.length}]`;
 
-      if (skipExisting && await fs.pathExists(outputPath)) {
+      // Skip if file exists on disk
+      if (await fs.pathExists(outputPath)) {
         const stat = await fs.stat(outputPath);
         if (stat.size > 0) {
           skipped++;
@@ -228,6 +251,17 @@ async function main() {
           });
           return;
         }
+      }
+
+      // Skip if in manifest (previously downloaded, moved to cloud)
+      if (manifestSet.has(outputPath)) {
+        skipped++;
+        console.log(chalk.gray(`${label} SKIP (manifest) ${video.moduleName} / ${video.lessonName}`));
+        report.results.push({
+          module: video.moduleName, lesson: video.lessonName, platform: video.platform,
+          url: video.url, outputPath, status: 'skipped',
+        });
+        return;
       }
 
       await fs.ensureDir(dir);
@@ -246,6 +280,8 @@ async function main() {
           module: video.moduleName, lesson: video.lessonName, platform: video.platform,
           url: video.url, outputPath, status: 'success',
         });
+        // Append to manifest
+        await fs.appendFile(manifestPath, outputPath + '\n');
       } catch (err) {
         failed++;
         console.error(chalk.red(`${label} FAIL ${video.moduleName} / ${video.lessonName}`));
@@ -264,7 +300,7 @@ async function main() {
   report.succeeded = succeeded;
   report.failed = failed;
   report.skipped = skipped;
-  const reportPath = path.join(projectRoot, 'output', community, 'download-report.json');
+  const reportPath = path.join(outputBase, community, 'download-report.json');
   await fs.writeJson(reportPath, report, { spaces: 2 });
 
   console.log('');

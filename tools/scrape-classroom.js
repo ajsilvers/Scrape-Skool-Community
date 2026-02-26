@@ -23,7 +23,7 @@ const DELAY_MS = 2000;
 const TIMEOUT_MS = 45000;
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const COOKIES_PATH = path.join(PROJECT_ROOT, 'cookies.json');
-const OUTPUT_DIR = path.join(PROJECT_ROOT, 'output');
+const OUTPUT_DIR = process.env.SKOOL_OUTPUT_DIR || path.join(PROJECT_ROOT, 'output');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +49,15 @@ function logError(msg) {
   console.error(`[${new Date().toLocaleTimeString()}] ERROR: ${msg}`);
 }
 
+function normalizeSameSite(value) {
+  if (!value) return 'Lax';
+  const lower = value.toLowerCase();
+  if (lower === 'no_restriction' || lower === 'none' || lower === 'unspecified') return 'None';
+  if (lower === 'lax') return 'Lax';
+  if (lower === 'strict') return 'Strict';
+  return 'Lax';
+}
+
 function normalizeCookies(raw) {
   return raw.map(c => ({
     name: c.name || c.Name,
@@ -57,7 +66,7 @@ function normalizeCookies(raw) {
     path: c.path || c.Path || '/',
     secure: c.secure !== undefined ? c.secure : true,
     httpOnly: c.httpOnly !== undefined ? c.httpOnly : false,
-    sameSite: c.sameSite || c.SameSite || 'Lax',
+    sameSite: normalizeSameSite(c.sameSite || c.SameSite),
   })).filter(c => c.name && c.value);
 }
 
@@ -407,8 +416,8 @@ async function scrapeClassroom(communityUrl, options = {}) {
       const coursePageProps = courseNextData?.props?.pageProps || {};
       const courseObj = coursePageProps.course;
 
-      // Build a map: lessonId -> metadata from __NEXT_DATA__
-      const lessonMetaMap = new Map();
+      // Build lesson list from __NEXT_DATA__ (has ALL lessons, not limited by sidebar lazy-loading)
+      const allLessonsFromData = [];
       if (courseObj?.children) {
         for (const section of courseObj.children) {
           const sectionCourse = section.course || {};
@@ -418,15 +427,34 @@ async function scrapeClassroom(communityUrl, options = {}) {
           for (const lessonItem of (section.children || [])) {
             const lCourse = lessonItem.course || {};
             const lMeta = typeof lCourse.metadata === 'object' ? lCourse.metadata : {};
-            lessonMetaMap.set(lCourse.id, {
-              title: lMeta.title,
+            allLessonsFromData.push({
+              lessonId: lCourse.id,
+              title: lMeta.title || lCourse.name || 'Untitled',
               desc: lMeta.desc,
               sectionTitle,
               name: lCourse.name,
+              url: `https://www.skool.com/${communitySlug}/classroom/${courseSlug}?md=${lCourse.id}`,
             });
           }
         }
       }
+
+      // Merge: use __NEXT_DATA__ lessons as primary, add any sidebar-only lessons not already found
+      const seenIds = new Set(allLessonsFromData.map(l => l.lessonId));
+      for (const sl of sidebarLessons) {
+        if (!seenIds.has(sl.lessonId)) {
+          allLessonsFromData.push({
+            lessonId: sl.lessonId,
+            title: sl.title,
+            desc: null,
+            sectionTitle: '',
+            name: '',
+            url: sl.url,
+          });
+        }
+      }
+
+      log(`  __NEXT_DATA__: ${allLessonsFromData.length} lessons (sidebar had ${sidebarLessons.length})`);
 
       // Build module data
       const moduleData = {
@@ -438,17 +466,14 @@ async function scrapeClassroom(communityUrl, options = {}) {
 
       // ===== Step 3: Extract content from course data, then visit each lesson for video =====
 
-      // First: build all lesson data from course page's __NEXT_DATA__ (content is here)
-      for (let li = 0; li < sidebarLessons.length; li++) {
-        const sl = sidebarLessons[li];
-        const metaInfo = lessonMetaMap.get(sl.lessonId);
-        const contentMarkdown = metaInfo?.desc ? parseDesc(metaInfo.desc) : '';
-        // Note: course-level __NEXT_DATA__ usually omits desc for individual lessons.
-        // Resources are primarily extracted when visiting each lesson page (below).
+      // First: build all lesson data from __NEXT_DATA__ (complete list, not limited by DOM)
+      for (let li = 0; li < allLessonsFromData.length; li++) {
+        const lessonInfo = allLessonsFromData[li];
+        const contentMarkdown = lessonInfo.desc ? parseDesc(lessonInfo.desc) : '';
         const resources = extractResourcesFromDesc(contentMarkdown);
         // Also try ProseMirror extraction if desc available at course level
-        if (metaInfo?.desc) {
-          const pmResources = extractResourcesFromProseMirror(metaInfo.desc);
+        if (lessonInfo.desc) {
+          const pmResources = extractResourcesFromProseMirror(lessonInfo.desc);
           for (const r of pmResources) {
             if (!resources.some(er => er.href === r.href)) {
               resources.push(r);
@@ -457,11 +482,11 @@ async function scrapeClassroom(communityUrl, options = {}) {
         }
 
         moduleData.lessons.push({
-          title: sl.title,
-          url: sl.url,
-          lessonId: sl.lessonId,
+          title: lessonInfo.title,
+          url: lessonInfo.url,
+          lessonId: lessonInfo.lessonId,
           module: courseTitle,
-          sectionTitle: metaInfo?.sectionTitle || '',
+          sectionTitle: lessonInfo.sectionTitle || '',
           content: { markdown: contentMarkdown },
           videos: [],
           images: [],

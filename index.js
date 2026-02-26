@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const COOKIES_PATH = path.join(__dirname, 'cookies.json');
-const OUTPUT_DIR = path.join(__dirname, 'output');
+const DEFAULT_OUTPUT_DIR = path.join(__dirname, 'output');
 const TOOLS_DIR = path.join(__dirname, 'tools');
 
 // ─── CLI Argument Parsing ────────────────────────────────────────────────────
@@ -26,16 +26,20 @@ function parseArgs(argv) {
     scrapeOnly: false,
     downloadOnly: false,
     skipExisting: false,
+    outputDir: null,
     help: false,
   };
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--scrape-only') {
       options.scrapeOnly = true;
     } else if (arg === '--download-only') {
       options.downloadOnly = true;
     } else if (arg === '--skip-existing') {
       options.skipExisting = true;
+    } else if (arg === '--output-dir' && i + 1 < args.length) {
+      options.outputDir = path.resolve(args[++i]);
     } else if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else if (arg.startsWith('http://') || arg.startsWith('https://')) {
@@ -73,10 +77,14 @@ ${chalk.yellow('Examples:')}
   ${chalk.dim('# Skip videos that already exist locally')}
   node index.js --skip-existing https://www.skool.com/aiautomationsbyjack
 
+  ${chalk.dim('# Save output to a different drive')}
+  node index.js --output-dir /Volumes/KINGSTON/skool-output https://www.skool.com/aiautomationsbyjack
+
 ${chalk.yellow('Options:')}
   --scrape-only     Only scrape classroom structure (skip downloads)
   --download-only   Only download media (requires prior scrape data)
   --skip-existing   Skip videos/resources that are already downloaded
+  --output-dir DIR  Save output to DIR instead of ./output
   -h, --help        Show this help message
 `);
 }
@@ -94,12 +102,12 @@ function extractSlug(url) {
   }
 }
 
-function runTool(scriptPath, args = []) {
+function runTool(scriptPath, args = [], extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', [scriptPath, ...args], {
       cwd: __dirname,
       stdio: ['inherit', 'pipe', 'pipe'],
-      env: { ...process.env, FORCE_COLOR: '1' },
+      env: { ...process.env, FORCE_COLOR: '1', ...extraEnv },
     });
 
     let stdout = '';
@@ -185,8 +193,8 @@ async function checkCookies() {
   }
 }
 
-async function loadScrapedData(slug) {
-  const dataPath = path.join(OUTPUT_DIR, slug, 'classroom-data.json');
+async function loadScrapedData(slug, outputDir) {
+  const dataPath = path.join(outputDir, slug, 'classroom-data.json');
   if (!await fs.pathExists(dataPath)) {
     return null;
   }
@@ -228,7 +236,7 @@ function countItems(data) {
 
 // ─── Pipeline Steps ──────────────────────────────────────────────────────────
 
-async function scrape(slug, url) {
+async function scrape(slug, url, env = {}) {
   const scriptPath = path.join(TOOLS_DIR, 'scrape-classroom.js');
   if (!await fs.pathExists(scriptPath)) {
     throw new Error(`Scraper not found at ${scriptPath}`);
@@ -237,10 +245,10 @@ async function scrape(slug, url) {
   console.log(chalk.cyan(`\n  Scraping classroom: ${chalk.bold(slug)}`));
   console.log(chalk.dim(`  URL: ${url}\n`));
 
-  await runTool(scriptPath, [url]);
+  await runTool(scriptPath, [url], env);
 }
 
-async function downloadVideos(slug, options = {}) {
+async function downloadVideos(slug, options = {}, env = {}) {
   const scriptPath = path.join(TOOLS_DIR, 'download-videos.js');
   if (!await fs.pathExists(scriptPath)) {
     throw new Error(`Video downloader not found at ${scriptPath}`);
@@ -250,10 +258,10 @@ async function downloadVideos(slug, options = {}) {
   if (options.skipExisting) args.push('--skip-existing');
 
   console.log(chalk.cyan(`\n  Downloading videos for: ${chalk.bold(slug)}`));
-  await runTool(scriptPath, args);
+  await runTool(scriptPath, args, env);
 }
 
-async function downloadResources(slug, options = {}) {
+async function downloadResources(slug, options = {}, env = {}) {
   const scriptPath = path.join(TOOLS_DIR, 'download-resources.js');
   if (!await fs.pathExists(scriptPath)) {
     throw new Error(`Resource downloader not found at ${scriptPath}`);
@@ -263,7 +271,7 @@ async function downloadResources(slug, options = {}) {
   if (options.skipExisting) args.push('--skip-existing');
 
   console.log(chalk.cyan(`\n  Downloading resources for: ${chalk.bold(slug)}`));
-  await runTool(scriptPath, args);
+  await runTool(scriptPath, args, env);
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -343,6 +351,15 @@ async function main() {
     spinner.succeed(`Cookies loaded: ${cookieStatus.cookieCount} cookies${expiredMsg}`);
   }
 
+  // Resolve output directory
+  const OUTPUT_DIR = options.outputDir || DEFAULT_OUTPUT_DIR;
+  const toolEnv = options.outputDir ? { SKOOL_OUTPUT_DIR: OUTPUT_DIR } : {};
+
+  if (options.outputDir) {
+    await fs.ensureDir(OUTPUT_DIR);
+    console.log(chalk.cyan(`\n  Output directory: ${OUTPUT_DIR}`));
+  }
+
   // Show plan
   console.log('');
   console.log(chalk.bold('  Pipeline Plan:'));
@@ -378,7 +395,7 @@ async function main() {
       const scrapeSpinner = ora({ text: `Scraping ${slug}...`, indent: 2 }).start();
       try {
         scrapeSpinner.stop();
-        await scrape(slug, url);
+        await scrape(slug, url, toolEnv);
         communityResult.scrapeSuccess = true;
         console.log(chalk.green(`\n  Scraping complete for ${slug}`));
       } catch (err) {
@@ -394,7 +411,7 @@ async function main() {
     }
 
     // Load scraped data for counts
-    const data = await loadScrapedData(slug);
+    const data = await loadScrapedData(slug, OUTPUT_DIR);
     if (data) {
       communityResult.counts = countItems(data);
       console.log(chalk.dim(
@@ -414,7 +431,7 @@ async function main() {
     // Step 2: Download videos
     if (!options.scrapeOnly) {
       try {
-        await downloadVideos(slug, { skipExisting: options.skipExisting });
+        await downloadVideos(slug, { skipExisting: options.skipExisting }, toolEnv);
         communityResult.videosSuccess = true;
         console.log(chalk.green(`\n  Video downloads complete for ${slug}`));
       } catch (err) {
@@ -425,7 +442,7 @@ async function main() {
 
       // Step 3: Download resources
       try {
-        await downloadResources(slug, { skipExisting: options.skipExisting });
+        await downloadResources(slug, { skipExisting: options.skipExisting }, toolEnv);
         communityResult.resourcesSuccess = true;
         console.log(chalk.green(`\n  Resource downloads complete for ${slug}`));
       } catch (err) {
